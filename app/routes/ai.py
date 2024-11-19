@@ -1,21 +1,19 @@
-
 from fastapi import APIRouter, Request
 
 from app.config import AppConfig
 from app.managers import VectorEmbeddingManager
+from fastapi import BackgroundTasks
 
 config = AppConfig()
 
-AIRouter = APIRouter(prefix="/ai", tags=["ai"])
+AIRouter = APIRouter()
 
 
 @AIRouter.post("/embeddings")
-async def create_embedding(request: Request):
+async def create_embedding(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     file_data = body.get("file_data")
-    meta_data = body.get("meta_data")
-    ## Clean Up Data + Enrich Textual Content
-    response = await VectorEmbeddingManager.process_document(file_data=file_data)
+    response = await VectorEmbeddingManager.embed_document(file_data, background_tasks)
     return response
 
 

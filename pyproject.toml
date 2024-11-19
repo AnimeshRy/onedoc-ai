@@ -14,4 +14,5 @@ dependencies = [
     "langchain-postgres>=0.0.12",
     "langchain-text-splitters>=0.3.2",
     "langchain-core>=0.3.19",
+    "asyncpg>=0.30.0",
 ]

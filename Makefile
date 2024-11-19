@@ -11,4 +11,4 @@ dev-install: ## Install requirements from pip in dev environment
 	uv run --dev
 
 run: ## Run the service
-	python -m app.service
+	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
