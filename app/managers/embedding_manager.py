@@ -130,6 +130,31 @@ class VectorEmbeddingManager:
         )
 
     @classmethod
+    async def fetch_meta_data_from_document(cls, file_data: dict) -> Tuple[dict, str]:
+        """
+        Extract metadata and file ID from file_data.
+
+        Args:
+            file_data (dict): Dictionary containing file information.
+
+        Returns:
+            Tuple[dict, str]: A tuple containing metadata dictionary and file ID.
+        """
+        file_id = file_data.get("id", "")
+
+        meta_data = {
+            "file_title": file_data.get("title", ""),
+            "file_owner_email": file_data.get("file_owner", {}).get("email", ""),
+            "file_owner_name": file_data.get("file_owner", {}).get("name", ""),
+            "file_status": file_data.get("status", ""),
+            "workspace_id": file_data.get("workspace_id", ""),
+            "workspace_title": file_data.get("workspace_info", {}).get(
+                "workspace_title", ""
+            ),
+        }
+        return meta_data, file_id
+
+    @classmethod
     async def process_document(
         cls,
         file_data: dict,
@@ -147,21 +172,34 @@ class VectorEmbeddingManager:
         Returns:
             List[str]: List of document IDs added to the vector store.
         """
-
-        ## TODO: Enrich Document before consumption
-        ## TODO: Add Workspace and File MetaData Info
+        # Split the text into chunks
         text_splitter = cls.create_recursive_text_splitter(chunk_size, chunk_overlap)
-        vector_store = cls._initialize_vector_store()
-        document_id = file_data.get("id")
-        markdown_content = file_data.get("markdown_data") or file_data.get("data")
-        document_chunks = text_splitter.split_text(markdown_content)
+        markdown_content = file_data.get("markdown_data") or file_data.get("data", "")
 
-        # Create Document objects with unique IDs
+        if not markdown_content:
+            raise ValueError("No markdown content available in file_data.")
+
+        document_chunks = text_splitter.split_text(markdown_content)
+        meta_data, document_id = await cls.fetch_meta_data_from_document(file_data)
+
         documents = [
-            Document(page_content=chunk, metadata={"source_id": f"{document_id}_{i}"})
+            Document(
+                page_content=chunk,
+                metadata={
+                    **meta_data,
+                    "chunk_index": i,
+                    "source_id": document_id,
+                },
+            )
             for i, chunk in enumerate(document_chunks)
         ]
-        document_ids = await vector_store.aadd_documents(documents=documents)
+
+        vector_store = cls._initialize_vector_store()
+        document_ids = await vector_store.aadd_documents(
+            documents=documents,
+            ids=[f"{document_id}_chunk_{i}" for i in range(len(documents))],
+        )
+
         return document_ids
 
     @classmethod
@@ -268,6 +306,7 @@ class VectorEmbeddingManager:
         ] = "similarity_score_threshold",
         num_chunks: int = 4,
         similarity_threshold: float = 0.5,
+        filters: Dict[str, Any] = {},
     ) -> List[str]:
         """
         Enhanced retrieval with multiple strategies and caching.
@@ -290,85 +329,31 @@ class VectorEmbeddingManager:
                 return chunks
 
         vector_store = cls._initialize_vector_store()
+
+        if filters.get("source_id"):
+            filters = {
+                "source_id": filters.get("source_id"),
+            }
+        elif filters.get("workspace_id"):
+            filters = {
+                "workspace_id": filters.get("workspace_id"),
+            }
+
         retriever = vector_store.as_retriever(
             search_type=retrieval_type,
-            search_kwargs={"score_threshold": similarity_threshold, "k": num_chunks},
+            search_kwargs={
+                "score_threshold": similarity_threshold,
+                "k": num_chunks,
+                "filter": filters,
+            },
         )
         return await retriever.ainvoke(query)
-        # async def get_similarity_chunks():
-        #     """
-        #     Get chunks using the cosine similarity retrieval strategy.
-
-        #     The cosine similarity is calculated between the query vector and the document vectors.
-        #     The results are filtered by the similarity threshold, and the top K chunks are returned.
-
-        #     Args:
-        #         query: The search query string
-        #         num_chunks: Number of relevant chunks to retrieve
-        #         similarity_threshold: Minimum similarity score threshold
-
-        #     Returns:
-        #         List of relevant document chunks
-        #     """
-        #     results = await vector_store.asimilarity_search_with_relevance_scores(
-        #         query=query, k=num_chunks
-        #     )
-        #     print("result", results)
-        #     return [
-        #         doc.page_content
-        #         for doc, score in results
-        #         if score >= similarity_threshold
-        #     ]
-
-        # async def get_mmr_chunks():
-        #     """
-        #     Get chunks using the Maximal Marginal Relevance (MMR) retrieval strategy.
-
-        #     MMR is a retrieval strategy that uses a combination of similarity and relevance
-        #     scores to rank documents. The similarity score is the cosine similarity between the
-        #     query and the document, and the relevance score is the dot product of the query and
-        #     document vectors.
-
-        #     Args:
-        #         query: The search query string
-        #         num_chunks: Number of relevant chunks to retrieve
-
-        #     Returns:
-        #         List of relevant document chunks
-        #     """
-        #     results = await vector_store.amax_marginal_relevance_search(
-        #         query=query, k=num_chunks, fetch_k=num_chunks * 2, lambda_mult=0.7
-        #     )
-        #     return [doc.page_content for doc in results]
-
-        # if retrieval_type == "similarity":
-        #     chunks = await get_similarity_chunks()
-        # elif retrieval_type == "mmr":
-        #     chunks = await get_mmr_chunks()
-        # else:  # hybrid approach
-        #     # Get chunks using both methods and combine them
-        #     similarity_chunks = await get_similarity_chunks()
-        #     mmr_chunks = await get_mmr_chunks()
-
-        #     # Combine and deduplicate chunks while preserving order
-        #     seen = set()
-        #     chunks = []
-        #     for chunk in similarity_chunks + mmr_chunks:
-        #         if chunk not in seen:
-        #             seen.add(chunk)
-        #             chunks.append(chunk)
-        #             if len(chunks) >= num_chunks:
-        #                 break
-
-        # # Update cache
-        # cls._chunk_cache[cache_key] = (chunks, datetime.now())
-        return chunks
 
     @classmethod
     async def generate_response(
         cls,
         query: str,
-        context_chunks: List[str],
+        context_chunks: List[Document],
         response_type: Literal[
             "default", "technical", "summary", "analytical"
         ] = "default",
@@ -393,19 +378,13 @@ class VectorEmbeddingManager:
         prompt = EMBEDDING_PROMPT_TEMPLATES.get(
             response_type, EMBEDDING_PROMPT_TEMPLATES["default"]
         )
+        context = "\n\n".join(chunk.page_content for chunk in context_chunks)
 
-        formatted = prompt.format_messages(
-            context="\n\n".join(context_chunks), question=query
-        )
-        print("PROMPT")
-        print(formatted)
-
-        # Create the generation chain
         chain = (
             RunnableMap(
                 {
-                    "context": RunnablePassthrough(),  # Pass the context unchanged
-                    "question": RunnablePassthrough(),  # Pass the question unchanged
+                    "context": lambda _: context,
+                    "question": RunnablePassthrough(),
                 }
             )
             | prompt
@@ -414,9 +393,8 @@ class VectorEmbeddingManager:
         )
 
         # Generate response
-        inputs = {"context": "\n\n".join(context_chunks), "question": query}
-        response = await chain.ainvoke(inputs)
-        return response
+        chat_response = await chain.ainvoke({"question": query})
+        return chat_response
 
     @classmethod
     async def query_and_generate(
@@ -427,8 +405,9 @@ class VectorEmbeddingManager:
             "default", "technical", "summary", "analytical"
         ] = "default",
         num_chunks: int = 4,
-        similarity_threshold: float = 0.7,
-        temperature: float = 0.7,
+        similarity_threshold: float = 0.5,
+        temperature: float = 0.6,
+        filters: Dict[str, Any] = {},
     ) -> Dict[str, Any]:
         """
         Enhanced combined method with multiple retrieval and generation strategies.
@@ -440,9 +419,7 @@ class VectorEmbeddingManager:
             num_chunks: Number of relevant chunks to retrieve
             similarity_threshold: Minimum similarity score threshold
             temperature: Temperature for response generation
-
-            Terminal -> temrinal
-            Movie ->
+            filters: Additional filters to apply
 
         Returns:
             Dictionary containing generated response and metadata
@@ -456,6 +433,7 @@ class VectorEmbeddingManager:
             retrieval_type=retrieval_type,
             num_chunks=num_chunks,
             similarity_threshold=similarity_threshold,
+            filters=filters,
         )
 
         if not relevant_chunks:
@@ -479,6 +457,7 @@ class VectorEmbeddingManager:
         return {
             "response": response,
             "chunks_found": len(relevant_chunks),
+            "chunks": relevant_chunks,
             "retrieval_type": retrieval_type,
             "response_type": response_type,
             "processing_time": (datetime.now() - start_time).total_seconds(),

@@ -4,7 +4,7 @@ CREATE TABLE file_embedding_status (
     resource_id VARCHAR(255) NOT NULL,
     status VARCHAR(255) NOT NULL,
     document_ids TEXT[],
-    root_id CHAR(255),
+    root_id VARCHAR(255),
     meta_info JSONB,
     created_at timestamptz DEFAULT NOW(),
     updated_at timestamptz DEFAULT NOW()

@@ -20,12 +20,14 @@ async def create_embedding(request: Request, background_tasks: BackgroundTasks):
 @AIRouter.get("/embeddings/search")
 async def search_embedding(request: Request):
     query = request.query_params.get("query")
+    file_id = request.query_params.get("file_id", None)
+    workspace_id = request.query_params.get("workspace_id", None)
     response = await VectorEmbeddingManager.query_and_generate(
         query=query,
-        response_type="default",
-        num_chunks=4,
-        similarity_threshold=0.5,
-        temperature=0.7,
+        filters={
+            "source_id": file_id,
+            "workspace_id": workspace_id,
+        },
     )
 
     await VectorEmbeddingManager.clear_expired_cache()
