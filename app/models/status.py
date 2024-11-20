@@ -4,7 +4,9 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP, ARRAY
 from sqlalchemy.sql import func
 from enum import Enum
 
-from . import Base
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
 
 
 class FileStatusEnum(str, Enum):

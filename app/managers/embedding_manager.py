@@ -263,7 +263,9 @@ class VectorEmbeddingManager:
     async def retrieve_relevant_chunks(
         cls,
         query: str,
-        retrieval_type: Literal["similarity", "mmr", "hybrid"] = "similarity",
+        retrieval_type: Literal[
+            "similarity", "mmr", "similarity_score_threshold"
+        ] = "similarity_score_threshold",
         num_chunks: int = 4,
         similarity_threshold: float = 0.5,
     ) -> List[str]:
@@ -288,74 +290,78 @@ class VectorEmbeddingManager:
                 return chunks
 
         vector_store = cls._initialize_vector_store()
+        retriever = vector_store.as_retriever(
+            search_type=retrieval_type,
+            search_kwargs={"score_threshold": similarity_threshold, "k": num_chunks},
+        )
+        return await retriever.ainvoke(query)
+        # async def get_similarity_chunks():
+        #     """
+        #     Get chunks using the cosine similarity retrieval strategy.
 
-        async def get_similarity_chunks():
-            """
-            Get chunks using the cosine similarity retrieval strategy.
+        #     The cosine similarity is calculated between the query vector and the document vectors.
+        #     The results are filtered by the similarity threshold, and the top K chunks are returned.
 
-            The cosine similarity is calculated between the query vector and the document vectors.
-            The results are filtered by the similarity threshold, and the top K chunks are returned.
+        #     Args:
+        #         query: The search query string
+        #         num_chunks: Number of relevant chunks to retrieve
+        #         similarity_threshold: Minimum similarity score threshold
 
-            Args:
-                query: The search query string
-                num_chunks: Number of relevant chunks to retrieve
-                similarity_threshold: Minimum similarity score threshold
+        #     Returns:
+        #         List of relevant document chunks
+        #     """
+        #     results = await vector_store.asimilarity_search_with_relevance_scores(
+        #         query=query, k=num_chunks
+        #     )
+        #     print("result", results)
+        #     return [
+        #         doc.page_content
+        #         for doc, score in results
+        #         if score >= similarity_threshold
+        #     ]
 
-            Returns:
-                List of relevant document chunks
-            """
-            results = await vector_store.asimilarity_search_with_relevance_scores(
-                query=query, k=num_chunks
-            )
-            print("result", results)
-            return [
-                doc.page_content
-                for doc, score in results
-                if score >= similarity_threshold
-            ]
+        # async def get_mmr_chunks():
+        #     """
+        #     Get chunks using the Maximal Marginal Relevance (MMR) retrieval strategy.
 
-        async def get_mmr_chunks():
-            """
-            Get chunks using the Maximal Marginal Relevance (MMR) retrieval strategy.
+        #     MMR is a retrieval strategy that uses a combination of similarity and relevance
+        #     scores to rank documents. The similarity score is the cosine similarity between the
+        #     query and the document, and the relevance score is the dot product of the query and
+        #     document vectors.
 
-            MMR is a retrieval strategy that uses a combination of similarity and relevance
-            scores to rank documents. The similarity score is the cosine similarity between the
-            query and the document, and the relevance score is the dot product of the query and
-            document vectors.
+        #     Args:
+        #         query: The search query string
+        #         num_chunks: Number of relevant chunks to retrieve
 
-            Args:
-                query: The search query string
-                num_chunks: Number of relevant chunks to retrieve
+        #     Returns:
+        #         List of relevant document chunks
+        #     """
+        #     results = await vector_store.amax_marginal_relevance_search(
+        #         query=query, k=num_chunks, fetch_k=num_chunks * 2, lambda_mult=0.7
+        #     )
+        #     return [doc.page_content for doc in results]
 
-            Returns:
-                List of relevant document chunks
-            """
-            results = await vector_store.amax_marginal_relevance_search(
-                query=query, k=num_chunks, fetch_k=num_chunks * 2, lambda_mult=0.7
-            )
-            return [doc.page_content for doc in results]
+        # if retrieval_type == "similarity":
+        #     chunks = await get_similarity_chunks()
+        # elif retrieval_type == "mmr":
+        #     chunks = await get_mmr_chunks()
+        # else:  # hybrid approach
+        #     # Get chunks using both methods and combine them
+        #     similarity_chunks = await get_similarity_chunks()
+        #     mmr_chunks = await get_mmr_chunks()
 
-        if retrieval_type == "similarity":
-            chunks = await get_similarity_chunks()
-        elif retrieval_type == "mmr":
-            chunks = await get_mmr_chunks()
-        else:  # hybrid approach
-            # Get chunks using both methods and combine them
-            similarity_chunks = await get_similarity_chunks()
-            mmr_chunks = await get_mmr_chunks()
+        #     # Combine and deduplicate chunks while preserving order
+        #     seen = set()
+        #     chunks = []
+        #     for chunk in similarity_chunks + mmr_chunks:
+        #         if chunk not in seen:
+        #             seen.add(chunk)
+        #             chunks.append(chunk)
+        #             if len(chunks) >= num_chunks:
+        #                 break
 
-            # Combine and deduplicate chunks while preserving order
-            seen = set()
-            chunks = []
-            for chunk in similarity_chunks + mmr_chunks:
-                if chunk not in seen:
-                    seen.add(chunk)
-                    chunks.append(chunk)
-                    if len(chunks) >= num_chunks:
-                        break
-
-        # Update cache
-        cls._chunk_cache[cache_key] = (chunks, datetime.now())
+        # # Update cache
+        # cls._chunk_cache[cache_key] = (chunks, datetime.now())
         return chunks
 
     @classmethod
