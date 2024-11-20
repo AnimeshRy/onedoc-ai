@@ -16,9 +16,19 @@ from langchain_text_splitters import (
 from fastapi import BackgroundTasks
 from app.config import AppConfig
 from app.constants import EMBEDDING_PROMPT_TEMPLATES
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from app.managers.status_manager import FileEmbeddingStatusManager
 from app.schemas.embedding import FileEmbeddingStatusCreateSchema
 from app.models import FileStatusEnum
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
+from typing_extensions import Annotated, TypedDict
+from typing import Sequence
 
 config = AppConfig.get_config()
 
@@ -350,6 +360,134 @@ class VectorEmbeddingManager:
         return await retriever.ainvoke(query)
 
     @classmethod
+    async def init_chat(
+        cls,
+        query: str,
+        retrieval_type: Literal[
+            "similarity", "mmr", "similarity_score_threshold"
+        ] = "similarity_score_threshold",
+        response_type: Literal[
+            "default", "technical", "summary", "analytical"
+        ] = "default",
+        num_chunks: int = 4,
+        similarity_threshold: float = 0.5,
+        temperature: float = 0.6,
+        filters: Dict[str, Any] = {},
+    ):
+        llm = cls._get_llm(config.chat_model)
+        llm.temperature = temperature
+
+        vector_store = cls._initialize_vector_store()
+
+        if filters.get("source_id"):
+            filters = {
+                "source_id": filters.get("source_id"),
+            }
+        elif filters.get("workspace_id"):
+            filters = {
+                "workspace_id": filters.get("workspace_id"),
+            }
+
+        retriever = vector_store.as_retriever(
+            search_type=retrieval_type,
+            search_kwargs={
+                "score_threshold": similarity_threshold,
+                "k": num_chunks,
+                "filter": filters,
+            },
+        )
+
+        myprompt = """You are a helpful assistant. Use the following pieces of retrieved context to answer the question.
+        Don't use information other than the retrieved context.
+
+        Tips:
+
+        1- Don't use the words like "mentioned in the provided context" in your answer.
+        2- If the answer is not in the retrieved documents, you are allowed to ask a follow-up question.
+        3- You are a helpful assistant that helps users with their questions in the most respectful way possible.
+
+        Do not answer questions other than the provided context:
+        {context}
+
+        \n\n===Answer===\n[Provide the normal answer here.]\n
+        """
+
+        # Create a prompt template for answering questions
+        qa_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", myprompt),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+            ]
+        )
+
+        contextualize_q_system_prompt = (
+            "Given a chat history and the latest user question "
+            "which might reference context in the chat history, "
+            "formulate a standalone question which can be understood "
+            "without the chat history. Do NOT answer the question, just "
+            "reformulate it if needed and otherwise return it as is."
+        )
+
+        # Create a prompt template for contextualizing questions
+        contextualize_q_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", contextualize_q_system_prompt),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+            ]
+        )
+
+        history_aware_retriever = create_history_aware_retriever(
+            llm, retriever, contextualize_q_prompt
+        )
+
+        question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+
+        # Create a retrieval chain that combines the history-aware retriever and the question answering chain
+        rag_chain = create_retrieval_chain(
+            history_aware_retriever, question_answer_chain
+        )
+
+        ### Statefully manage chat history ###
+        class State(TypedDict):
+            input: str
+            chat_history: Annotated[Sequence[BaseMessage], add_messages]
+            context: str
+            answer: str
+
+        async def call_model(state: State):
+            response = await rag_chain.ainvoke(state)
+            print("RESPONSE", response)
+            return {
+                "chat_history": [
+                    HumanMessage(state["input"]),
+                    AIMessage(response["answer"]),
+                ],
+                "context": response["context"],
+                "answer": response["answer"],
+            }
+
+        workflow = StateGraph(state_schema=State)
+        workflow.add_edge(START, "model")
+        workflow.add_node("model", call_model)
+
+        memory = MemorySaver()
+        app = workflow.compile(checkpointer=memory)
+
+        config2 = {"configurable": {"thread_id": "abc123"}}
+
+        result = await app.ainvoke(
+            {"input": query},
+            config=config2,
+        )
+
+        print("RESULT", result)
+        print(result["answer"])
+
+        return "ddsd"
+
+    @classmethod
     async def generate_response(
         cls,
         query: str,
@@ -373,8 +511,6 @@ class VectorEmbeddingManager:
         """
         llm = cls._get_llm(config.chat_model)
         llm.temperature = temperature
-
-        # Select appropriate prompt template
         prompt = EMBEDDING_PROMPT_TEMPLATES.get(
             response_type, EMBEDDING_PROMPT_TEMPLATES["default"]
         )
@@ -392,7 +528,6 @@ class VectorEmbeddingManager:
             | StrOutputParser()
         )
 
-        # Generate response
         chat_response = await chain.ainvoke({"question": query})
         return chat_response
 
@@ -400,7 +535,9 @@ class VectorEmbeddingManager:
     async def query_and_generate(
         cls,
         query: str,
-        retrieval_type: Literal["similarity", "mmr", "hybrid"] = "similarity",
+        retrieval_type: Literal[
+            "similarity", "mmr", "similarity_score_threshold"
+        ] = "similarity_score_threshold",
         response_type: Literal[
             "default", "technical", "summary", "analytical"
         ] = "default",

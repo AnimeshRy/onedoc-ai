@@ -29,6 +29,19 @@ async def search_embedding(request: Request):
             "workspace_id": workspace_id,
         },
     )
+    return response
 
-    await VectorEmbeddingManager.clear_expired_cache()
+
+@AIRouter.get("/embeddings/chat")
+async def start_chat(request: Request):
+    query = request.query_params.get("query")
+    file_id = request.query_params.get("file_id", None)
+    workspace_id = request.query_params.get("workspace_id", None)
+    response = await VectorEmbeddingManager.init_chat(
+        query=query,
+        filters={
+            "source_id": file_id,
+            "workspace_id": workspace_id,
+        },
+    )
     return response
