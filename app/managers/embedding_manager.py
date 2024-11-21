@@ -608,7 +608,7 @@ class VectorEmbeddingManager:
         document_data = await AsyncPGManager.get_embeddings_by_source_id_to_document(
             source_id=source_id
         )
-        if len(document_data):
+        if len(document_data) <= 0:
             return {
                 "documents": document_data,
                 "file_id": source_id,
