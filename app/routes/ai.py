@@ -37,11 +37,22 @@ async def start_chat(request: Request):
     query = request.query_params.get("query")
     file_id = request.query_params.get("file_id", None)
     workspace_id = request.query_params.get("workspace_id", None)
+    thread_id = request.query_params.get("thread_id", None)
     response = await VectorEmbeddingManager.init_chat(
         query=query,
         filters={
             "source_id": file_id,
             "workspace_id": workspace_id,
         },
+        thread_id=thread_id,
+    )
+    return response
+
+
+@AIRouter.get("/embeddings/summarize")
+async def summarize_document(request: Request):
+    file_id = request.query_params.get("file_id")
+    response = await VectorEmbeddingManager.generate_document_summary(
+        source_id=file_id, summary_type="default"
     )
     return response

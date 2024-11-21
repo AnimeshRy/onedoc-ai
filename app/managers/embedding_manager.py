@@ -16,11 +16,16 @@ from langchain_text_splitters import (
 from fastapi import BackgroundTasks
 from app.config import AppConfig
 from app.constants import EMBEDDING_PROMPT_TEMPLATES
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from app.constants.prompt_templates import (
+    CHAT_EMBEDDING_PROMPT_TEMPLATES,
+    CONTEXT_SYSTEM_PROMPT,
+    SUMMARY_PROMPT_TEMPLATES,
+)
+from app.managers.asyncpg_manager import AsyncPGManager
 from app.managers.status_manager import FileEmbeddingStatusManager
 from app.schemas.embedding import FileEmbeddingStatusCreateSchema
 from app.models import FileStatusEnum
@@ -29,8 +34,22 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
 from typing import Sequence
+from langchain.chains.summarize import load_summarize_chain
+from langchain_core.prompts import PromptTemplate
 
 config = AppConfig.get_config()
+
+
+### Statefully manage chat history ###
+class State(TypedDict):
+    input: str
+    chat_history: Annotated[Sequence[BaseMessage], add_messages]
+    context: str
+    answer: str
+
+
+class CustomPGVector(PGVector):
+    pass
 
 
 class VectorEmbeddingManager:
@@ -39,14 +58,15 @@ class VectorEmbeddingManager:
     """
 
     _embeddings_model: Optional[OpenAIEmbeddings] = None
-    _vector_store: Optional[PGVector] = None
     _llm: Optional[ChatOpenAI] = None
-    EMBEDDING_FILE_COLLCECTION_NAME = "document_embeddings"
+    EMBEDDING_FILE_COLLECTION_NAME = "document_embeddings"
     EMBEDDING_LENGTH = 1536
 
     # Cache for storing retrieved chunks with TTL
     _chunk_cache: Dict[str, Tuple[List[str], datetime]] = {}
     CACHE_TTL_HOURS = 24
+
+    _session_ids = []
 
     @classmethod
     def _get_embeddings_model(
@@ -76,20 +96,19 @@ class VectorEmbeddingManager:
         return cls._embeddings_model
 
     @classmethod
-    def _initialize_vector_store(cls) -> PGVector:
+    def _initialize_vector_store(cls) -> CustomPGVector:
         """Initialize and return the vector store instance."""
-        if cls._vector_store is None:
-            connection_string = config.langchain_db_connection_string
-            embedding_model = cls._get_embeddings_model()
-            cls._vector_store = PGVector(
-                embeddings=embedding_model,
-                embedding_length=cls.EMBEDDING_LENGTH,
-                collection_name=cls.EMBEDDING_FILE_COLLCECTION_NAME,
-                connection=connection_string,
-                use_jsonb=True,
-                async_mode=True,
-                create_extension=True,
-            )
+        connection_string = config.langchain_db_connection_string
+        embedding_model = cls._get_embeddings_model()
+        cls._vector_store = CustomPGVector(
+            embeddings=embedding_model,
+            embedding_length=cls.EMBEDDING_LENGTH,
+            collection_name=cls.EMBEDDING_FILE_COLLECTION_NAME,
+            connection=connection_string,
+            use_jsonb=True,
+            async_mode=True,
+            create_extension=True,
+        )
         return cls._vector_store
 
     @classmethod
@@ -205,9 +224,11 @@ class VectorEmbeddingManager:
         ]
 
         vector_store = cls._initialize_vector_store()
+        ids = [f"{document_id}_chunk_{i}" for i in range(len(documents))]
+        print("ddd", ids)
         document_ids = await vector_store.aadd_documents(
             documents=documents,
-            ids=[f"{document_id}_chunk_{i}" for i in range(len(documents))],
+            ids=ids,
         )
 
         return document_ids
@@ -286,7 +307,7 @@ class VectorEmbeddingManager:
                 )
 
             cls._llm = ChatOpenAI(
-                model=model_name, api_key=openai_api_key, temperature=0.7
+                model=model_name, api_key=openai_api_key, temperature=0.4
             )
         return cls._llm
 
@@ -373,7 +394,11 @@ class VectorEmbeddingManager:
         similarity_threshold: float = 0.5,
         temperature: float = 0.6,
         filters: Dict[str, Any] = {},
+        thread_id: str = None,
     ):
+        ## TODO: Figure out a way to store thread_id, work with langgraph persistance
+        ## TODO: Stream response
+
         llm = cls._get_llm(config.chat_model)
         llm.temperature = temperature
 
@@ -397,68 +422,28 @@ class VectorEmbeddingManager:
             },
         )
 
-        myprompt = """You are a helpful assistant. Use the following pieces of retrieved context to answer the question.
-        Don't use information other than the retrieved context.
-
-        Tips:
-
-        1- Don't use the words like "mentioned in the provided context" in your answer.
-        2- If the answer is not in the retrieved documents, you are allowed to ask a follow-up question.
-        3- You are a helpful assistant that helps users with their questions in the most respectful way possible.
-
-        Do not answer questions other than the provided context:
-        {context}
-
-        \n\n===Answer===\n[Provide the normal answer here.]\n
-        """
-
-        # Create a prompt template for answering questions
-        qa_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", myprompt),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ]
+        prompt = CHAT_EMBEDDING_PROMPT_TEMPLATES.get(
+            response_type, CHAT_EMBEDDING_PROMPT_TEMPLATES["default"]
         )
 
-        contextualize_q_system_prompt = (
-            "Given a chat history and the latest user question "
-            "which might reference context in the chat history, "
-            "formulate a standalone question which can be understood "
-            "without the chat history. Do NOT answer the question, just "
-            "reformulate it if needed and otherwise return it as is."
-        )
-
-        # Create a prompt template for contextualizing questions
-        contextualize_q_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", contextualize_q_system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ]
-        )
+        contextualize_q_prompt = CONTEXT_SYSTEM_PROMPT
 
         history_aware_retriever = create_history_aware_retriever(
             llm, retriever, contextualize_q_prompt
         )
 
-        question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+        question_answer_chain = create_stuff_documents_chain(llm, prompt)
 
-        # Create a retrieval chain that combines the history-aware retriever and the question answering chain
         rag_chain = create_retrieval_chain(
             history_aware_retriever, question_answer_chain
         )
 
-        ### Statefully manage chat history ###
-        class State(TypedDict):
-            input: str
-            chat_history: Annotated[Sequence[BaseMessage], add_messages]
-            context: str
-            answer: str
+        if thread_id is None or thread_id not in cls._session_ids:
+            thread_id = str(uuid.uuid4())
+            cls._session_ids.append(thread_id)
 
         async def call_model(state: State):
             response = await rag_chain.ainvoke(state)
-            print("RESPONSE", response)
             return {
                 "chat_history": [
                     HumanMessage(state["input"]),
@@ -475,17 +460,14 @@ class VectorEmbeddingManager:
         memory = MemorySaver()
         app = workflow.compile(checkpointer=memory)
 
-        config2 = {"configurable": {"thread_id": "abc123"}}
+        pointer_config = {"configurable": {"thread_id": thread_id}}
 
         result = await app.ainvoke(
             {"input": query},
-            config=config2,
+            config=pointer_config,
         )
 
-        print("RESULT", result)
-        print(result["answer"])
-
-        return "ddsd"
+        return {**result, "thread_id": thread_id}
 
     @classmethod
     async def generate_response(
@@ -615,34 +597,37 @@ class VectorEmbeddingManager:
     @classmethod
     async def generate_document_summary(
         cls,
-        document_id: str,
-        query: str,
-        response_type: Literal[
-            "default", "technical", "summary", "analytical"
+        source_id: str,
+        summary_type: Literal[
+            "default", "executive", "detailed", "comparative"
         ] = "default",
-        num_chunks: int = 4,
-        similarity_threshold: float = 0.7,
-        temperature: float = 0.7,
     ):
         """
-        Generate a summary of a document based on the provided query.
-
-        Args:
-            document_id: The ID of the document to summarize
-            query: The user's question
-            response_type: Type of response template to use
-            num_chunks: Number of relevant chunks to retrieve
-            similarity_threshold: Minimum similarity score threshold
-            temperature: Temperature for response generation
-
-        Returns:
-            Generated summary string
+        This uses MapReduce
         """
-        return await cls.query_and_generate(
-            query=query,
-            retrieval_type="similarity",
-            response_type=response_type,
-            num_chunks=num_chunks,
-            similarity_threshold=similarity_threshold,
-            temperature=temperature,
+        document_data = await AsyncPGManager.get_embeddings_by_source_id_to_document(
+            source_id=source_id
         )
+        if len(document_data):
+            return {
+                "documents": document_data,
+                "file_id": source_id,
+                "error": "No Embedding Found",
+            }
+
+        llm = cls._get_llm(config.chat_model)
+        map_template = SUMMARY_PROMPT_TEMPLATES.get(summary_type).get("map_prompt", {})
+        reduce_template = SUMMARY_PROMPT_TEMPLATES.get(summary_type).get(
+            "reduce_prompt", {}
+        )
+        chain = load_summarize_chain(
+            llm=llm,
+            chain_type="map_reduce",
+            verbose=True,
+            map_prompt=PromptTemplate(template=map_template, input_variables=["text"]),
+            combine_prompt=PromptTemplate(
+                template=reduce_template, input_variables=["text"]
+            ),
+        )
+        response = await chain.arun(document_data)
+        return {"documents": document_data, "file_id": source_id, "summary": response}
