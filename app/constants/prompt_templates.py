@@ -64,6 +64,7 @@ CHAT_EMBEDDING_PROMPT_TEMPLATES = {
             Do not answer questions other than the provided context:
             {context}
             """),
+            MessagesPlaceholder("chat_history"),
             HumanMessagePromptTemplate.from_template("Question: {input}"),
         ]
     ),
@@ -76,6 +77,7 @@ CHAT_EMBEDDING_PROMPT_TEMPLATES = {
             Do not answer questions other than the provided context:
             {context}
             """),
+            MessagesPlaceholder("chat_history"),
             HumanMessagePromptTemplate.from_template("Technical Query: {input}"),
         ]
     ),
@@ -87,6 +89,7 @@ CHAT_EMBEDDING_PROMPT_TEMPLATES = {
             Do not answer questions other than the provided context:
             {context}
             """),
+            MessagesPlaceholder("chat_history"),
             HumanMessagePromptTemplate.from_template("Summary Request: {input}"),
         ]
     ),
@@ -99,6 +102,7 @@ CHAT_EMBEDDING_PROMPT_TEMPLATES = {
             Do not answer questions other than the provided context:
             {context}
             """),
+            MessagesPlaceholder("chat_history"),
             HumanMessagePromptTemplate.from_template("Analytical Question: {input}"),
         ]
     ),

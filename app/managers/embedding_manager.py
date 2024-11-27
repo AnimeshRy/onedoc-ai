@@ -67,6 +67,7 @@ class VectorEmbeddingManager:
     CACHE_TTL_HOURS = 24
 
     _session_ids = []
+    history = []
 
     @classmethod
     def _get_embeddings_model(
@@ -460,12 +461,16 @@ class VectorEmbeddingManager:
         memory = MemorySaver()
         app = workflow.compile(checkpointer=memory)
 
-        pointer_config = {"configurable": {"thread_id": thread_id}}
+        pointer_config = {"thread_id": thread_id}
 
         result = await app.ainvoke(
             {"input": query},
             config=pointer_config,
         )
+
+        chat_history = app.get_state(pointer_config).values["chat_history"]
+        for message in chat_history:
+            message.pretty_print()
 
         return {**result, "thread_id": thread_id}
 

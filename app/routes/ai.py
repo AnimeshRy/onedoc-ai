@@ -56,3 +56,12 @@ async def summarize_document(request: Request):
         source_id=file_id, summary_type="default"
     )
     return response
+
+
+@AIRouter.post("/generate_mermaid")
+async def generate_mermaid_diagram(request: Request):
+    file_data = await request.json()
+    response = await VectorEmbeddingManager.generate_mermaid_diagram(
+        file_data=file_data
+    )
+    return response

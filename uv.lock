@@ -759,6 +759,21 @@ wheels = [
 ]
 
 [[package]]
+name = "langgraph-checkpoint-postgres"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langgraph-checkpoint" },
+    { name = "orjson" },
+    { name = "psycopg" },
+    { name = "psycopg-pool" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ff/7d/6f9cfe71968e03e4f2c1ab2ab8c2f8346e3798d27be2cb554448a0b05e00/langgraph_checkpoint_postgres-2.0.3.tar.gz", hash = "sha256:69a28a4f9714bf183be19be92c84e3aaf5ea503c5a0b34ec388471588135bf51", size = 14102 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/1d/92ed8646973f9dad42f1667fe19e8f9c2b6295acf216a894ad40f808ae1f/langgraph_checkpoint_postgres-2.0.3-py3-none-any.whl", hash = "sha256:d341c994cef4f37f466113be1cec0d0319d50b1d3ffbbc443871148d54ce18fe", size = 19640 },
+]
+
+[[package]]
 name = "langgraph-sdk"
 version = "0.1.36"
 source = { registry = "https://pypi.org/simple" }
@@ -1020,6 +1035,7 @@ dependencies = [
     { name = "langchain-postgres" },
     { name = "langchain-text-splitters" },
     { name = "langgraph" },
+    { name = "langgraph-checkpoint-postgres" },
     { name = "pre-commit" },
     { name = "pydantic-settings" },
     { name = "ruff" },
@@ -1037,6 +1053,7 @@ requires-dist = [
     { name = "langchain-postgres", specifier = ">=0.0.12" },
     { name = "langchain-text-splitters", specifier = ">=0.3.2" },
     { name = "langgraph", specifier = ">=0.2.52" },
+    { name = "langgraph-checkpoint-postgres" },
     { name = "pre-commit", specifier = ">=4.0.1" },
     { name = "pydantic-settings", specifier = ">=2.6.1" },
     { name = "ruff", specifier = ">=0.7.4" },
